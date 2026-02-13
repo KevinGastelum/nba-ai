@@ -151,6 +151,7 @@ When user's prompt is NOT in English:
 
 | Project Type                           | Primary Agent         | Skills                        |
 | -------------------------------------- | --------------------- | ----------------------------- |
+| **NBA AI** (Data, Models, Web)         | `nba-ai-specialist`   | nba-ai-core, python-patterns  |
 | **MOBILE** (iOS, Android, RN, Flutter) | `mobile-developer`    | mobile-design                 |
 | **WEB** (Next.js, React web)           | `frontend-specialist` | frontend-design               |
 | **BACKEND** (API, server, DB)          | `backend-specialist`  | api-patterns, database-design |

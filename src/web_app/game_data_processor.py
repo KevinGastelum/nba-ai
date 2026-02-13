@@ -137,12 +137,31 @@ def process_game_data(games, user_tz=None):
             pred_win_pct = ""
 
         # Round the predicted scores
+        pre_game_pred_home_score = (
+            round(pre_game_predictions.get("pred_home_score", ""))
+            if pre_game_predictions.get("pred_home_score", "") != ""
+            else ""
+        )
+        pre_game_pred_away_score = (
+            round(pre_game_predictions.get("pred_away_score", ""))
+            if pre_game_predictions.get("pred_away_score", "") != ""
+            else ""
+        )
+
         pred_home_score = round(pred_home_score) if pred_home_score != "" else ""
         pred_away_score = round(pred_away_score) if pred_away_score != "" else ""
 
         outbound_game_data["pred_home_score"] = pred_home_score
         outbound_game_data["pred_away_score"] = pred_away_score
         outbound_game_data["pred_winner"] = pred_winner
+        outbound_game_data["pre_game_pred_home_score"] = pre_game_pred_home_score
+        outbound_game_data["pre_game_pred_away_score"] = pre_game_pred_away_score
+        
+        # Debug logging
+        if pre_game_pred_home_score:
+            print(f"DEBUG: Game {game_id} Pre-Game: {pre_game_pred_home_score}-{pre_game_pred_away_score}, Current: {pred_home_score}-{pred_away_score}")
+        else:
+             print(f"DEBUG: Game {game_id} NO pre-game prediction found. Keys: {predictions.keys()}")
 
         # Format predicted win percentage
         if pred_win_pct == "":

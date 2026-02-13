@@ -66,6 +66,9 @@ def games():
         game_ids = request.args.get("game_ids")
         date = request.args.get("date")
         predictor = request.args.get("predictor")
+        if not predictor:
+             predictor = config.get("default_predictor", "Baseline")
+
         update_predictions_str = request.args.get("update_predictions", "True").lower()
 
         # Validate that only one of game_ids or date is provided

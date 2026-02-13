@@ -58,8 +58,16 @@ function fetchAndUpdateGames() {
           const datetimeDisplay = isPostponed ? 'PPD' : game.datetime_display.split("-").join("<br>");
           const homeScore = isPostponed ? '-' : game.home_score;
           const awayScore = isPostponed ? '-' : game.away_score;
-          const predHomeScore = isPostponed ? '-' : game.pred_home_score;
-          const predAwayScore = isPostponed ? '-' : game.pred_away_score;
+          let predHomeScore = isPostponed ? '-' : game.pred_home_score;
+          let predAwayScore = isPostponed ? '-' : game.pred_away_score;
+
+          // Add pre-game predictions if available and different
+          if (!isPostponed && game.pre_game_pred_home_score && game.pre_game_pred_home_score !== game.pred_home_score) {
+              predHomeScore += ` <br><small class="text-muted">(Pre: ${game.pre_game_pred_home_score})</small>`;
+          }
+          if (!isPostponed && game.pre_game_pred_away_score && game.pre_game_pred_away_score !== game.pred_away_score) {
+              predAwayScore += ` <br><small class="text-muted">(Pre: ${game.pre_game_pred_away_score})</small>`;
+          }
           const predWinner = isPostponed ? '-' : `${game.pred_winner} ${game.pred_win_pct}`;
 
           row.innerHTML = `

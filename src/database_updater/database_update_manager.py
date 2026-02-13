@@ -122,6 +122,7 @@ def update_database(
     season="Current",
     predictor=None,
     db_path=DB_PATH,
+    target_game_ids=None,
 ):
     """
     Orchestrates the full update process for the specified season.
@@ -142,37 +143,44 @@ def update_database(
 
     logging.info(f"=== Updating database for {season} ===")
 
-    # STEP 1: Update Schedule
-    update_schedule(season)
+    # STEP 1: Update Schedule (Skip full sync if targeted)
+    if not target_game_ids:
+        update_schedule(season, db_path)
+    else:
+        # If targeted, just sync live status if it's current season
+        # (This is fast and ensures we have latest scores/states for the targeted games)
+        from src.database_updater.schedule import sync_live_game_status
+        if season == determine_current_season():
+            sync_live_game_status(db_path)
 
     # STEP 2: Update Players List
     update_players(db_path)
 
     # STEP 3: Update Injury Data
-    update_injury_data(season, db_path)
+    update_injury_data(season, db_path, target_game_ids=target_game_ids)
 
     # STEP 4: Update Betting Data
     update_betting_lines(season, db_path)
 
     # STEP 5: Update Play-by-Play Data
-    update_pbp_data(season, db_path)
+    update_pbp_data(season, db_path, target_game_ids=target_game_ids)
 
     # STEP 6: Update Game States (parsed from PbP)
-    update_game_state_data(season, db_path)
+    update_game_state_data(season, db_path, target_game_ids=target_game_ids)
 
     # STEP 7: Update Boxscore Data
-    update_boxscore_data(season, db_path)
+    update_boxscore_data(season, db_path, target_game_ids=target_game_ids)
 
     # STEP 8: Update Pre Game Data (Prior States, Feature Sets)
-    update_pre_game_data(season, db_path)
+    update_pre_game_data(season, db_path, target_game_ids=target_game_ids)
 
     # STEP 9: Update Predictions
     if predictor:
-        update_prediction_data(season, predictor, db_path)
+        update_prediction_data(season, predictor, db_path, target_game_ids=target_game_ids)
 
 
 @log_execution_time()
-def update_pbp_data(season, db_path=DB_PATH, chunk_size=100):
+def update_pbp_data(season, db_path=DB_PATH, chunk_size=100, target_game_ids=None):
     """
     Collects play-by-play logs for games needing updates.
 
@@ -192,7 +200,7 @@ def update_pbp_data(season, db_path=DB_PATH, chunk_size=100):
 
     stage_logger = StageLogger("PBP")
 
-    game_ids = get_games_needing_pbp_update(season, db_path)
+    game_ids = get_games_needing_pbp_update(season, db_path, target_game_ids=target_game_ids)
 
     if not game_ids:
         stage_logger.set_counts(added=0, updated=0, removed=0)
@@ -249,7 +257,7 @@ def update_pbp_data(season, db_path=DB_PATH, chunk_size=100):
 
 
 @log_execution_time()
-def update_game_state_data(season, db_path=DB_PATH, chunk_size=100):
+def update_game_state_data(season, db_path=DB_PATH, chunk_size=100, target_game_ids=None):
     """
     Parses play-by-play logs into structured GameStates.
 
@@ -269,7 +277,7 @@ def update_game_state_data(season, db_path=DB_PATH, chunk_size=100):
 
     stage_logger = StageLogger("GameStates")
 
-    game_ids = get_games_needing_game_state_update(season, db_path)
+    game_ids = get_games_needing_game_state_update(season, db_path, target_game_ids=target_game_ids)
 
     if not game_ids:
         stage_logger.set_counts(added=0, updated=0, removed=0)
@@ -373,7 +381,7 @@ def update_game_state_data(season, db_path=DB_PATH, chunk_size=100):
 
 
 @log_execution_time()
-def update_boxscore_data(season, db_path=DB_PATH, chunk_size=100):
+def update_boxscore_data(season, db_path=DB_PATH, chunk_size=100, target_game_ids=None):
     """
     Collects boxscore data (PlayerBox, TeamBox) for games needing updates.
 
@@ -394,7 +402,7 @@ def update_boxscore_data(season, db_path=DB_PATH, chunk_size=100):
     stage_logger = StageLogger("Boxscores")
     validator = BoxscoresValidator()
 
-    game_ids = get_games_needing_boxscores(season, db_path)
+    game_ids = get_games_needing_boxscores(season, db_path, target_game_ids=target_game_ids)
 
     if not game_ids:
         stage_logger.set_counts(added=0, updated=0, removed=0)
@@ -499,7 +507,7 @@ def update_game_data(season, db_path=DB_PATH, chunk_size=100):
 # Helper functions for determining which games need updates
 
 
-def get_games_needing_pbp_update(season, db_path):
+def get_games_needing_pbp_update(season, db_path, target_game_ids=None):
     """
     Get game IDs that need PBP data updates.
 
@@ -525,36 +533,41 @@ def get_games_needing_pbp_update(season, db_path):
 
     with sqlite3.connect(db_path) as conn:
         cursor = conn.cursor()
-        cursor.execute(
-            """
-            SELECT game_id FROM Games
-            WHERE season = ?
-            AND season_type IN ('Regular Season', 'Post Season')
-            AND (
-                -- In-progress games (refetch every 5 minutes)
-                (status = 2
-                 AND (pbp_last_fetched_at IS NULL 
-                      OR pbp_last_fetched_at < datetime('now', '-5 minutes')))
-                
-                OR
-                
-                -- Completed but not finalized (refetch every 5 minutes until finalized)
-                (status = 3
-                 AND game_data_finalized = 0
-                 AND pbp_last_fetched_at IS NOT NULL
-                 AND pbp_last_fetched_at < datetime('now', '-5 minutes'))
-                
-                OR
-                
-                -- ALL completed games missing PBP (no time window restriction)
-                (status = 3
-                 AND game_data_finalized = 0
-                 AND NOT EXISTS (SELECT 1 FROM PbP_Logs WHERE PbP_Logs.game_id = Games.game_id))
-            )
-            ORDER BY date_time_utc
-            """,
-            (season,),
+        query = """
+        SELECT game_id FROM Games
+        WHERE season = ?
+        AND season_type IN ('Regular Season', 'Post Season')
+        AND (
+            -- In-progress games (refetch every 5 minutes)
+            (status = 2
+             AND (pbp_last_fetched_at IS NULL 
+                  OR pbp_last_fetched_at < datetime('now', '-5 minutes')))
+            
+            OR
+            
+            -- Completed but not finalized (refetch every 5 minutes until finalized)
+            (status = 3
+             AND game_data_finalized = 0
+             AND pbp_last_fetched_at IS NOT NULL
+             AND pbp_last_fetched_at < datetime('now', '-5 minutes'))
+            
+            OR
+            
+            -- ALL completed games missing PBP (no time window restriction)
+            (status = 3
+             AND game_data_finalized = 0
+             AND NOT EXISTS (SELECT 1 FROM PbP_Logs WHERE PbP_Logs.game_id = Games.game_id))
         )
+        """
+        params = [season]
+
+        if target_game_ids:
+            placeholders = ",".join(["?" for _ in target_game_ids])
+            query += f" AND game_id IN ({placeholders})"
+            params.extend(target_game_ids)
+
+        query += " ORDER BY date_time_utc"
+        cursor.execute(query, params)
         return [row[0] for row in cursor.fetchall()]
 
 
@@ -691,7 +704,7 @@ def update_pbp_and_gamestates(season, db_path, chunk_size):
 
 
 @log_execution_time()
-def update_injury_data(season, db_path=DB_PATH):
+def update_injury_data(season, db_path=DB_PATH, target_game_ids=None):
     """
     Collects NBA Official injury reports for the specified season.
 
@@ -717,9 +730,9 @@ def update_injury_data(season, db_path=DB_PATH):
     actual_season = current_season if season == "Current" else season
 
     try:
-        # Fetch injury reports with season-wide gap filling
+        # Fetch injury reports with season-wide gap filling (unless targeted)
         counts = update_nba_official_injuries(
-            season=actual_season, db_path=db_path, stage_logger=stage_logger
+            season=actual_season, db_path=db_path, stage_logger=stage_logger, target_game_ids=target_game_ids
         )
 
         # Validate injury data
@@ -842,7 +855,7 @@ def update_betting_lines(season, db_path=DB_PATH):
 
 
 @log_execution_time()
-def update_pre_game_data(season, db_path=DB_PATH, chunk_size=100):
+def update_pre_game_data(season, db_path=DB_PATH, chunk_size=100, target_game_ids=None):
     """
     Updates prior states and feature sets for games with incomplete pre-game data.
 
@@ -860,7 +873,7 @@ def update_pre_game_data(season, db_path=DB_PATH, chunk_size=100):
     stage_logger = StageLogger("Features")
     validator = FeaturesValidator()
 
-    game_ids = get_games_with_incomplete_pre_game_data(season, db_path)
+    game_ids = get_games_with_incomplete_pre_game_data(season, db_path, target_game_ids=target_game_ids)
 
     if not game_ids:
         stage_logger.set_counts(added=0, updated=0, removed=0)
@@ -975,7 +988,7 @@ def update_pre_game_data(season, db_path=DB_PATH, chunk_size=100):
 
 
 @log_execution_time()
-def update_prediction_data(season, predictor, db_path=DB_PATH):
+def update_prediction_data(season, predictor, db_path=DB_PATH, target_game_ids=None):
     """
     Generates and saves predictions for upcoming games.
 
@@ -994,7 +1007,7 @@ def update_prediction_data(season, predictor, db_path=DB_PATH):
     validator = PredictionsValidator()
 
     # Get game_ids for games needing updated predictions
-    game_ids = get_games_for_prediction_update(season, predictor, db_path)
+    game_ids = get_games_for_prediction_update(season, predictor, db_path, target_game_ids=target_game_ids)
 
     if not game_ids:
         stage_logger.set_counts(added=0, updated=0, removed=0)
@@ -1019,7 +1032,7 @@ def update_prediction_data(season, predictor, db_path=DB_PATH):
     stage_logger.log_complete()
 
 
-def get_games_needing_boxscores(season, db_path):
+def get_games_needing_boxscores(season, db_path, target_game_ids=None):
     """
     Get game IDs that need boxscore data updates.
 
@@ -1053,8 +1066,7 @@ def get_games_needing_boxscores(season, db_path):
 
         if has_timestamp_column:
             # Use timestamp-based caching if column exists
-            cursor.execute(
-                """
+            query = """
                 SELECT game_id FROM Games
                 WHERE season = ?
                 AND season_type IN ('Regular Season', 'Post Season')
@@ -1079,30 +1091,41 @@ def get_games_needing_boxscores(season, db_path):
                      AND boxscore_data_finalized = 0
                      AND NOT EXISTS (SELECT 1 FROM PlayerBox WHERE PlayerBox.game_id = Games.game_id))
                 )
-                ORDER BY date_time_utc
-                """,
-                (season,),
-            )
+            """
+            params = [season]
+
+            if target_game_ids:
+                placeholders = ",".join(["?" for _ in target_game_ids])
+                query += f" AND game_id IN ({placeholders})"
+                params.extend(target_game_ids)
+
+            query += " ORDER BY date_time_utc"
+            cursor.execute(query, params)
         else:
             # Fallback to simple logic if column doesn't exist (first run)
-            cursor.execute(
-                """
+            query = """
                 SELECT game_id FROM Games
                 WHERE season = ?
                 AND season_type IN ('Regular Season', 'Post Season')
                 AND status IN (2, 3)  -- In Progress or Final
                 AND boxscore_data_finalized = 0
                 AND NOT EXISTS (SELECT 1 FROM PlayerBox WHERE PlayerBox.game_id = Games.game_id)
-                ORDER BY date_time_utc
-                """,
-                (season,),
-            )
+            """
+            params = [season]
+
+            if target_game_ids:
+                placeholders = ",".join(["?" for _ in target_game_ids])
+                query += f" AND game_id IN ({placeholders})"
+                params.extend(target_game_ids)
+
+            query += " ORDER BY date_time_utc"
+            cursor.execute(query, params)
 
         return [row[0] for row in cursor.fetchall()]
 
 
 @log_execution_time()
-def get_games_needing_game_state_update(season, db_path=DB_PATH):
+def get_games_needing_game_state_update(season, db_path=DB_PATH, target_game_ids=None):
     """
     Retrieves game_ids for games needing GameState creation/update from PBP logs.
 
@@ -1126,8 +1149,7 @@ def get_games_needing_game_state_update(season, db_path=DB_PATH):
 
     with sqlite3.connect(db_path) as db_connection:
         cursor = db_connection.cursor()
-        cursor.execute(
-            """
+        query = """
             SELECT game_id 
             FROM Games 
             WHERE season = ?
@@ -1149,10 +1171,16 @@ def get_games_needing_game_state_update(season, db_path=DB_PATH):
                           WHERE gs.game_id = Games.game_id AND gs.is_final_state = 1
                       ))
               )
-            ORDER BY date_time_utc;
-        """,
-            (season,),
-        )
+        """
+        params = [season]
+
+        if target_game_ids:
+            placeholders = ",".join(["?" for _ in target_game_ids])
+            query += f" AND game_id IN ({placeholders})"
+            params.extend(target_game_ids)
+
+        query += " ORDER BY date_time_utc;"
+        cursor.execute(query, params)
 
         games_to_update = cursor.fetchall()
 
@@ -1198,7 +1226,7 @@ def get_games_needing_boxscores_only(season, db_path=DB_PATH):
 
 
 @log_execution_time()
-def get_games_with_incomplete_pre_game_data(season, db_path=DB_PATH):
+def get_games_with_incomplete_pre_game_data(season, db_path=DB_PATH, target_game_ids=None):
     """
     Retrieves game_ids for games with incomplete pre-game data.
 
@@ -1218,7 +1246,12 @@ def get_games_with_incomplete_pre_game_data(season, db_path=DB_PATH):
     if season == "Current":
         season = determine_current_season()
 
-    query = """
+    target_filter = ""
+    if target_game_ids:
+        placeholders = ",".join(["?" for _ in target_game_ids])
+        target_filter = f" AND game_id IN ({placeholders})"
+
+    query = f"""
     SELECT game_id
     FROM Games
     WHERE season = ?
@@ -1227,6 +1260,7 @@ def get_games_with_incomplete_pre_game_data(season, db_path=DB_PATH):
       AND game_data_finalized = 1
       AND status IN (2, 3)  -- In Progress or Final
       AND status_text != 'PPD'  -- Exclude postponed games
+      {target_filter}
 
     UNION
 
@@ -1237,6 +1271,7 @@ def get_games_with_incomplete_pre_game_data(season, db_path=DB_PATH):
       AND g1.pre_game_data_finalized = 0
       AND g1.status = 1  -- Not Started
       AND g1.status_text != 'PPD'  -- Exclude postponed games
+      {target_filter.replace('game_id', 'g1.game_id')}
       AND NOT EXISTS (
           SELECT 1
           FROM Games g2
@@ -1251,7 +1286,15 @@ def get_games_with_incomplete_pre_game_data(season, db_path=DB_PATH):
 
     with sqlite3.connect(db_path) as conn:
         cursor = conn.cursor()
-        cursor.execute(query, (season, season, season))
+        params = [season]
+        if target_game_ids:
+            params.extend(target_game_ids)
+        params.append(season)
+        if target_game_ids:
+            params.extend(target_game_ids)
+        params.append(season)
+        
+        cursor.execute(query, tuple(params))
         results = cursor.fetchall()
 
     return [row[0] for row in results]
@@ -1381,7 +1424,7 @@ def _mark_boxscore_games_finalized(game_ids, db_path=DB_PATH):
 
 
 @log_execution_time()
-def get_games_for_prediction_update(season, predictor, db_path=DB_PATH):
+def get_games_for_prediction_update(season, predictor, db_path=DB_PATH, target_game_ids=None):
     """
     Retrieves game_ids for games needing updated predictions.
 
@@ -1419,10 +1462,16 @@ def get_games_for_prediction_update(season, predictor, db_path=DB_PATH):
             AND LENGTH(f.feature_set) > 10
             AND p.game_id IS NULL
         """
+    params = [predictor, season]
+
+    if target_game_ids:
+        placeholders = ",".join(["?" for _ in target_game_ids])
+        query += f" AND g.game_id IN ({placeholders})"
+        params.extend(target_game_ids)
 
     with sqlite3.connect(db_path) as conn:
         cursor = conn.cursor()
-        cursor.execute(query, (predictor, season))
+        cursor.execute(query, tuple(params))
         result = cursor.fetchall()
 
     game_ids = [row[0] for row in result]

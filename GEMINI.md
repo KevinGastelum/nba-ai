@@ -1,4 +1,4 @@
-# NBA AI - Claude Code Instructions
+# NBA AI - Gemini Code Instructions
 
 > **Last Updated**: January 10, 2026
 > **Current Focus**: GenAI Predictor Design (Sprint 17)
@@ -274,9 +274,10 @@ All predictors implement:
 
 ---
 
-## Working with Claude Code
+## Working with Gemini Code
 
 ### What to Expect from Me
+- ✅ Always remember we are using GitBash as our terminal
 - ✅ Always activate venv before Python commands
 - ✅ Follow datetime strategy (UTC storage, Eastern queries, user timezone display)
 - ✅ Respect North Star (GenAI is high priority, infrastructure is maintenance-only)
@@ -369,7 +370,7 @@ python -m src.database_updater.database_update_manager --season=2025-2026 --pred
 # Start web app
 python start_app.py --predictor=Tree --log_level=INFO
 
-# When done, ask Claude before committing!
+# When done, ask Gemini before committing!
 ```
 
 ---

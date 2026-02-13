@@ -907,7 +907,7 @@ def save_injury_records(df: pd.DataFrame, db_path: str = DB_PATH) -> dict:
 
 
 def update_nba_official_injuries(
-    days_back: int = 1, season: str = None, db_path: str = DB_PATH, stage_logger=None
+    days_back: int = 1, season: str = None, db_path: str = DB_PATH, stage_logger=None, target_game_ids=None
 ) -> dict:
     """
     Update NBA Official injury reports for recent days or entire season.
@@ -937,8 +937,26 @@ def update_nba_official_injuries(
         hour=0, minute=0, second=0, microsecond=0
     )
 
-    # If season provided, fetch all missing dates in season
-    if season:
+    # If target_game_ids provided, only check dates for those games
+    if target_game_ids:
+        with sqlite3.connect(db_path) as conn:
+            cursor = conn.cursor()
+            placeholders = ",".join(["?" for _ in target_game_ids])
+            cursor.execute(
+                f"SELECT DISTINCT DATE(date_time_utc) FROM Games WHERE game_id IN ({placeholders})",
+                target_game_ids,
+            )
+            date_strs = [row[0] for row in cursor.fetchall()]
+
+        all_dates = []
+        for date_str in date_strs:
+            try:
+                dt = datetime.strptime(date_str, "%Y-%m-%d")
+                all_dates.append(eastern.localize(dt))
+            except ValueError:
+                continue
+    # If season provided (and no targets), fetch all missing dates in season
+    elif season:
         current_season = determine_current_season()
 
         # Determine season date range

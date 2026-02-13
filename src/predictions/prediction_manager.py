@@ -41,23 +41,47 @@ PREDICTORS_CONFIG = config["predictors"]
 def _get_predictor_map():
     """
     Lazily build the PREDICTOR_MAP to avoid importing heavy dependencies at module load.
-
-    This defers torch/sklearn imports until a predictor is actually requested,
-    saving ~2s startup time when using Baseline predictor.
+    Wraps imports in try-except to handle missing dependencies (e.g., torch for MLP).
     """
-    from src.predictions.prediction_engines.baseline_predictor import BaselinePredictor
-    from src.predictions.prediction_engines.ensemble_predictor import EnsemblePredictor
-    from src.predictions.prediction_engines.linear_predictor import LinearPredictor
-    from src.predictions.prediction_engines.mlp_predictor import MLPPredictor
-    from src.predictions.prediction_engines.tree_predictor import TreePredictor
+    predictor_map = {}
 
-    return {
-        "Baseline": BaselinePredictor,
-        "Linear": LinearPredictor,
-        "Tree": TreePredictor,
-        "MLP": MLPPredictor,
-        "Ensemble": EnsemblePredictor,
-    }
+    # Baseline (Minimal dependencies)
+    try:
+        from src.predictions.prediction_engines.baseline_predictor import BaselinePredictor
+        predictor_map["Baseline"] = BaselinePredictor
+    except ImportError as e:
+        logging.warning(f"Failed to load Baseline predictor: {e}")
+
+    # Linear
+    try:
+        from src.predictions.prediction_engines.linear_predictor import LinearPredictor
+        predictor_map["Linear"] = LinearPredictor
+    except ImportError as e:
+        logging.warning(f"Failed to load Linear predictor: {e}")
+
+    # Tree (XGBoost)
+    try:
+        from src.predictions.prediction_engines.tree_predictor import TreePredictor
+        predictor_map["Tree"] = TreePredictor
+    except ImportError as e:
+        logging.warning(f"Failed to load Tree predictor: {e}")
+
+    # MLP (Requires Torch)
+    try:
+        from src.predictions.prediction_engines.mlp_predictor import MLPPredictor
+        predictor_map["MLP"] = MLPPredictor
+    except ImportError as e:
+        logging.debug(f"MLP predictor not available (likely missing torch): {e}")
+
+    # Ensemble (May require Torch/MLP)
+    try:
+        from src.predictions.prediction_engines.ensemble_predictor import EnsemblePredictor
+        predictor_map["Ensemble"] = EnsemblePredictor
+    except ImportError as e:
+        logging.debug(f"Ensemble predictor not available (likely missing torch/MLP): {e}")
+
+    return predictor_map
+
 
 
 # Valid predictor names (for validation before lazy import)
